@@ -269,7 +269,7 @@ def decrypt_arknights_text(
     normalize: bool = False,
 ) -> bytes:
     """Decrypt arbitrary arknights data."""
-    if match := re.search(r"(\w+_(?:table|data|const|database))[0-9a-fA-F]{6}", name):
+    if match := re.search(r"(\w+_(?:table|data|const|database|text))[0-9a-fA-F]{6}", name):
         return decrypt_fbs_file(data, match[1], rsa=rsa, server=server, normalize=normalize)
 
     return decrypt_aes_text(data, rsa=rsa)
@@ -294,7 +294,8 @@ def normalize_json(data: bytes, *, indent: int = 4, lenient: bool = True) -> byt
     return json.dumps(json_data, indent=indent, ensure_ascii=False).encode("utf-8")
 
 
-DYNP = r"assets/torappu/dynamicassets/"
+def match_container(regex: str, container: str) -> typing.Optional[re.Match[str]]:
+    return re.match(r"dyn/" + regex, container) or re.match(r"assets/torappu/dynamicassets/" + regex, container)
 
 
 def find_ab_assets(
@@ -309,17 +310,17 @@ def find_ab_assets(
             data = obj.read()
             script, name = data.m_Script.encode("utf-8", "surrogateescape"), data.m_Name
 
-            if match := re.match(DYNP + r"(.+\.txt)", container):
+            if match := match_container(r"(.+\.txt)", container):
                 yield (match[1], script)
 
-            elif match := re.match(DYNP + r"((gamedata/)?.+?\.json)", container):
+            elif match := match_container(r"((gamedata/)?.+?\.json)", container):
                 yield (match[1], normalize_json(bytes(script), lenient=not normalize))
 
-            elif match := re.match(DYNP + r"(gamedata/.+?)\.lua\.bytes", container):
+            elif match := match_container(r"(gamedata/.+?)\.lua\.bytes", container):
                 text = decrypt_aes_text(script)
                 yield (match[1] + ".lua", text)
 
-            elif match := re.match(DYNP + r"(gamedata/levels/(?:obt|activities)/.+?)\.bytes", container):
+            elif match := match_container(r"(gamedata/levels/(?:obt|activities)/.+?)\.bytes", container):
                 try:
                     text = normalize_json(bytes(script)[128:], lenient=not normalize)
                 except UnboundLocalError:  # effectively bson's "type not recognized" error
@@ -331,7 +332,7 @@ def find_ab_assets(
                 text = normalize_json(script)
                 yield ("gamedata/battle/buff_template_data.json", text)
 
-            elif match := re.match(DYNP + r"(gamedata/.+?)(?:[a-fA-F0-9]{6})?\.bytes", container):
+            elif match := match_container(r"(gamedata/.+?)(?:[a-fA-F0-9]{6})?\.bytes", container):
                 text = decrypt_arknights_text(
                     script,
                     name=name,
@@ -341,7 +342,7 @@ def find_ab_assets(
                 yield (match[1] + ".json", normalize_json(text, lenient=not normalize))
 
             else:
-                warnings.warn("Unrecognized container")
+                warnings.warn(f"Unrecognized container: {container}")
 
 
 def extract_ab(
@@ -442,8 +443,11 @@ class BundleAssets(base.Assets):
         if not path.exists():
             return None
 
-        with path.open("r") as file:
-            return json.load(file)
+        try:
+            with path.open("r") as file:
+                return json.load(file)
+        except Exception:
+            return None
 
     async def _download_unity_file(
         self,

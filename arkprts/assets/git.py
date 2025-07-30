@@ -13,6 +13,7 @@ import logging
 import os
 import os.path
 import pathlib
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -31,15 +32,26 @@ LOGGER: logging.Logger = logging.getLogger("arkprts.assets.git")
 
 PathLike = typing.Union[pathlib.Path, str]
 
-CN_GAMEDATA_REPOSITORY = "Kengxxiao/ArknightsGameData"  # master
-YOSTAR_GAMEDATA_REPOSITORY = "Kengxxiao/ArknightsGameData_YoStar"  # main
 
-LANGUAGE_PATH: typing.Mapping[netn.ArknightsServer, PathLike] = {
-    "cn": "ArknightsGameData/zh_CN",
-    "bili": "ArknightsGameData/zh_CN",
-    "en": "ArknightsGameData_YoStar/en_US",
-    "jp": "ArknightsGameData_YoStar/ja_JP",
-    "kr": "ArknightsGameData_YoStar/ko_KR",
+LANGUAGE_REPOSITORIES: typing.Mapping[netn.ArknightsServer, tuple[tuple[str, str, str], PathLike]] = {
+    "cn": (("Kengxxiao/ArknightsGameData", "ArknightsGameData", "master"), "ArknightsGameData/zh_CN"),
+    "bili": (("Kengxxiao/ArknightsGameData", "ArknightsGameData", "master"), "ArknightsGameData/zh_CN"),
+    "en": (
+        ("Kengxxiao/ArknightsGameData_YoStar", "ArknightsGameData_YoStar", "main"),
+        "ArknightsGameData_YoStar/en_US",
+    ),
+    "jp": (
+        ("Kengxxiao/ArknightsGameData_YoStar", "ArknightsGameData_YoStar", "main"),
+        "ArknightsGameData_YoStar/ja_JP",
+    ),
+    "kr": (
+        ("Kengxxiao/ArknightsGameData_YoStar", "ArknightsGameData_YoStar", "main"),
+        "ArknightsGameData_YoStar/ko_KR",
+    ),
+    "tw": (
+        ("ArknightsAssets/ArknightsGamedata", "ArknightsAssets_ArknightsGamedata", "master"),
+        "ArknightsAssets_ArknightsGamedata/tw",
+    ),
 }
 
 
@@ -120,7 +132,7 @@ async def download_repository(
     try:
         commit = await get_github_repository_commit(repository, branch=branch)
     except aiohttp.ClientResponseError:
-        if commit_file.exists():
+        if not force and commit_file.exists():
             LOGGER.warning("Failed to get %s commit, skipping download", repository, exc_info=True)
             return
 
@@ -154,23 +166,36 @@ async def update_git_repository(repository: str, directory: PathLike, *, branch:
 
     if not (directory / ".git").exists():
         LOGGER.info("Initializing repository in %s", directory)
-        directory.parent.mkdir(parents=True, exist_ok=True)
+        if directory.exists():
+            shutil.rmtree(directory)
+        directory.mkdir(parents=True)
         proc = await asyncio.create_subprocess_exec(
             "git",
             "clone",
             "--depth=1",
             *([] if branch == "HEAD" else ["--branch", branch]),
             f"https://github.com/{repository}.git",
-            cwd=directory.parent,
+            ".",
+            cwd=directory,
         )
-        await proc.wait()
-        old_directory = directory.parent / repository.split("/", 1)[1]
-        if directory != old_directory:
-            old_directory.rename(directory)
+        assert await proc.wait() == 0
     else:
         LOGGER.info("Updating %s in %s", repository, directory)
         proc = await asyncio.create_subprocess_exec("git", "pull", cwd=directory)
-        await proc.wait()
+        code = await proc.wait()
+        if code != 0:
+            if branch == "HEAD":
+                raise Exception(f"Failed to pull {repository} while unaware of the desired branch.")
+
+            LOGGER.warning("Normal pull failed for %s. Forcing update", repository)
+            proc = await asyncio.create_subprocess_exec("git", "fetch", "--all", "--prune", cwd=directory)
+            assert await proc.wait() == 0
+            proc = await asyncio.create_subprocess_exec("git", "reset", "--hard", f"origin/{branch}", cwd=directory)
+            assert await proc.wait() == 0
+            proc = await asyncio.create_subprocess_exec("git", "clean", "-fdx", cwd=directory)
+            assert await proc.wait() == 0
+            proc = await asyncio.create_subprocess_exec("git", "gc", "--prune=now", "--aggressive", cwd=directory)
+            assert await proc.wait() == 0
 
 
 async def _check_git_installed_async() -> bool:
@@ -203,7 +228,7 @@ class GitAssets(base.Assets):
     """Game assets client downloaded through 3rd party git repositories."""
 
     parent_directory: pathlib.Path
-    """Parent directory of ArknightsGameData and ArnightsGameData_YoStar"""
+    """Parent directory of downloaded repositories."""
 
     def __init__(
         self,
@@ -216,13 +241,20 @@ class GitAssets(base.Assets):
 
         self.parent_directory = pathlib.Path(parent_directory or netn.APPDATA_DIR)
 
-    async def update_assets(self, *, force: bool = False) -> None:
+    async def update_assets(
+        self,
+        server: typing.Collection[netn.ArknightsServer] | netn.ArknightsServer | None = None,
+        *,
+        force: bool = False,
+    ) -> None:
         """Update game data."""
-        for repo in (CN_GAMEDATA_REPOSITORY, YOSTAR_GAMEDATA_REPOSITORY):
+        repos = [LANGUAGE_REPOSITORIES[server]] if isinstance(server, str) else [LANGUAGE_REPOSITORIES[i] for i in server] if server else list(LANGUAGE_REPOSITORIES.values())
+        for (repo, destination, branch), _ in list(set(repos)):
             await update_repository(
                 repo,
-                self.parent_directory / repo.split("/")[1],
+                self.parent_directory / destination,
                 allow="gamedata/excel/*",
+                branch=branch,
                 force=force,
             )
 
@@ -230,5 +262,5 @@ class GitAssets(base.Assets):
 
     def get_file(self, path: str, *, server: netn.ArknightsServer | None = None) -> bytes:
         """Get an extracted asset file."""
-        directory = self.parent_directory / LANGUAGE_PATH[server or self.default_server]
+        directory = self.parent_directory / LANGUAGE_REPOSITORIES[server or self.default_server][1]
         return (directory / path).read_bytes()
