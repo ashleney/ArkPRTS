@@ -248,7 +248,11 @@ class GitAssets(base.Assets):
         force: bool = False,
     ) -> None:
         """Update game data."""
-        repos = [LANGUAGE_REPOSITORIES[server]] if isinstance(server, str) else [LANGUAGE_REPOSITORIES[i] for i in server] if server else list(LANGUAGE_REPOSITORIES.values())
+        repos = (
+            [LANGUAGE_REPOSITORIES[server]]
+            if isinstance(server, str)
+            else [LANGUAGE_REPOSITORIES[i] for i in server] if server else list(LANGUAGE_REPOSITORIES.values())
+        )
         for (repo, destination, branch), _ in list(set(repos)):
             await update_repository(
                 repo,

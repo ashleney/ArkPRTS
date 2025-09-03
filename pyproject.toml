@@ -1,7 +1,7 @@
 [project]
 name = "arkprts"
 requires-python = ">=3.9"
-version = "0.3.17"
+version = "0.3.18"
 dynamic = [
     "dependencies",
     "description",
@@ -29,6 +29,7 @@ reportMissingTypeStubs = "none"
 reportImportCycles = "none"
 reportPrivateUsage = "none"
 disableBytesTypePromotions = false
+reportDeprecated = false
 
 [tool.ruff]
 target-version = "py38"
