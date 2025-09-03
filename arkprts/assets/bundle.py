@@ -217,8 +217,11 @@ def recursively_collapse_keys(obj: typing.Any) -> typing.Any:
     """Recursively collapse arknights flatc dictionaries."""
     if isinstance(obj, list):
         obj = typing.cast("typing.Any", obj)
-        if all(isinstance(item, dict) and (item.keys() == {"key", "value"} or item.keys() == {"Key", "Value"}) for item in obj):
-            return {(item["key"] if "key" in item else item["Key"]): recursively_collapse_keys(item["value"] if "value" in item else item["Value"]) for item in obj}
+        if all(isinstance(item, dict) and item.keys() == {"key", "value"} for item in obj):
+            return {item["key"]: recursively_collapse_keys(item["value"]) for item in obj}
+
+        elif all(isinstance(item, dict) and item.keys() == {"Key", "Value"} for item in obj):
+            return {item["Key"]: recursively_collapse_keys(item["Value"]) for item in obj}
 
         return [recursively_collapse_keys(item) for item in obj]
 
